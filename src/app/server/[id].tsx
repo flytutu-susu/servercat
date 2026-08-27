@@ -78,7 +78,8 @@ export default function ServerDetailScreen() {
       setRxHistory((h) => [...h, rx].slice(-HISTORY_LEN));
       setTxHistory((h) => [...h, tx].slice(-HISTORY_LEN));
     } catch {
-      // 状态已在 store 中反映；下次轮询会自动重连
+      // 使会话失效，下次轮询自动重连；状态已在 store 中反映
+      useConnections.getState().invalidate(id);
     }
   }, [id]);
 

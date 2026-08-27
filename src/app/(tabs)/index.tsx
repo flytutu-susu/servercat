@@ -16,8 +16,7 @@ import { AreaChart } from '@/components/AreaChart';
 import { Accent, Colors, Radius, Spacing } from '@/constants/theme';
 import { useConnections, type ConnStatus } from '@/services/connection';
 import { pollOnce, type PrevSample } from '@/services/monitor';
-import { isMockMode } from '@/ssh';
-import { getSSH } from '@/ssh';
+import { getSSH, isMockMode } from '@/ssh';
 import { useServers, type ServerRecord } from '@/store/servers';
 
 interface ServerSummary {
@@ -141,7 +140,8 @@ export default function ServersScreen() {
               };
             });
           } catch {
-            // ensureConnected 内部已记录状态
+            // 连接已断开：使会话失效，下一轮轮询自动重连
+            useConnections.getState().invalidate(server.id);
           }
         })
       );
