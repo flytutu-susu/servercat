@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "ServerCat",
+    "slug": "servercat",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "servercat",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "bundleIdentifier": "com.servercat.ios",
+      "buildNumber": "1",
+      "supportsTablet": true,
+      "icon": "./assets/expo.icon"
+    },
+    "android": {
+      "package": "com.servercat.ios",
+      "adaptiveIcon": {
+        "backgroundColor": "#0B0B0E",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundImage": "./assets/images/android-icon-background.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0B0B0E",
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 76
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}

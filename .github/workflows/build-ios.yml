@@ -1,0 +1,76 @@
+name: Build iOS IPA (unsigned)
+
+# 在 macOS runner 上构建未签名 IPA，产物用 SideStore/AltStore 以免费 Apple ID 签名安装。
+# 触发方式：手动 workflow_dispatch，或打 tag（如 v1.0.0）时自动构建并发布 Release。
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install JS dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build terminal.html (xterm bundle)
+        run: npm run build:terminal
+
+      - name: Prebuild iOS project (+ pod install)
+        run: npx expo prebuild --platform ios --clean
+        env:
+          CI: '1'
+
+      - name: Resolve workspace/scheme
+        id: xc
+        run: |
+          WORKSPACE=$(ls -d ios/*.xcworkspace | head -1)
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          echo "workspace=$WORKSPACE" >> "$GITHUB_OUTPUT"
+          echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
+          echo "Using workspace=$WORKSPACE scheme=$SCHEME"
+
+      - name: Archive (unsigned)
+        run: |
+          xcodebuild \
+            -workspace "${{ steps.xc.outputs.workspace }}" \
+            -scheme "${{ steps.xc.outputs.scheme }}" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath ios/build/App.xcarchive \
+            archive \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p ios/build/Payload
+          cp -R ios/build/App.xcarchive/Products/Applications/*.app ios/build/Payload/
+          cd ios/build
+          zip -r ServerCat-unsigned.ipa Payload
+          ls -lh ServerCat-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ServerCat-unsigned.ipa
+          path: ios/build/ServerCat-unsigned.ipa
+          retention-days: 30
+
+      - name: Create GitHub Release (tag builds)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ios/build/ServerCat-unsigned.ipa

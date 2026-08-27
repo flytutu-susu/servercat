@@ -1,0 +1,8 @@
+{
+  "name": "react-native-ssh",
+  "version": "1.0.0",
+  "description": "SSH client (NMSSH/libssh2) for ServerCat app",
+  "main": "index.js",
+  "private": true,
+  "license": "MIT"
+}
