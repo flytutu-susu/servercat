@@ -29,11 +29,10 @@ echo "== 编译 OpenSSL ${OPENSSL_VER} (ios64-cross, arm64) =="
 cd "openssl-${OPENSSL_VER}"
 # 显式指定 SDK（xcrun 自动发现不可靠）
 SDKROOT_PATH="$(xcrun --sdk iphoneos --show-sdk-path)"
+echo "SDK: $SDKROOT_PATH"
 export CROSS_TOP="$(xcode-select -p)/Platforms/iPhoneOS.platform/Developer"
 export CROSS_SDK="iPhoneOS.sdk"
-./Configure ios64-cross no-shared no-tests \
-  --prefix="$DEPS_PREFIX" \
-  -isysroot "$SDKROOT_PATH" -arch arm64 "-miphoneos-version-min=${MIN_IOS}"
+./Configure ios64-cross no-shared no-tests --prefix="$DEPS_PREFIX"
 make -j"$(sysctl -n hw.ncpu)" build_libs
 make install_sw
 ls -lh "$DEPS_PREFIX/lib/"
