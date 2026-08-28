@@ -1,9 +1,11 @@
-/** Mock SSH 客户端：在 Expo Go / 无原生模块环境下提供仿真数据，便于开发 UI */
+/** Mock SSH 客户端：在 Expo Go / 演示模式下提供仿真数据，便于开发 UI */
 
 import { base64ToUtf8, utf8ToBase64 } from '@/utils/base64';
 
 import type {
   ExecResult,
+  KeyGenOptions,
+  KeyPair,
   ShellClosedEvent,
   ShellDataEvent,
   SSHClient,
@@ -11,10 +13,17 @@ import type {
 } from './types';
 
 interface MockState {
-  cpuIdle: number;
-  cpuTotal: number;
+  cores: { user: number; sys: number; idle: number; iowait: number }[];
   rx: number;
   tx: number;
+  diskReadSectors: number;
+  diskWriteSectors: number;
+  diskReads: number;
+  diskWrites: number;
+  retrans: number;
+  outSegs: number;
+  activeOpens: number;
+  passiveOpens: number;
   bootTime: number;
 }
 
@@ -26,57 +35,81 @@ export class MockSSHClient implements SSHClient {
   private sessions = new Map<string, MockState>();
   private shellListeners = new Set<(e: ShellDataEvent) => void>();
   private closeListeners = new Set<(e: ShellClosedEvent) => void>();
+  private shellBuffers = new Map<string, (chunk: string) => void>();
   private seq = 0;
 
   async connect(_opts: SSHConnectOptions): Promise<string> {
     await new Promise((r) => setTimeout(r, 400));
     const id = `mock-${++this.seq}`;
     this.sessions.set(id, {
-      cpuIdle: 5_000_000,
-      cpuTotal: 10_000_000,
-      rx: 800_000_000,
-      tx: 300_000_000,
-      bootTime: Date.now() - rnd(3, 90) * 86400_000,
+      cores: Array.from({ length: 4 }, () => ({
+        user: Math.floor(rnd(20000, 60000)),
+        sys: Math.floor(rnd(10000, 30000)),
+        idle: 2_200_000,
+        iowait: Math.floor(rnd(500, 3000)),
+      })),
+      rx: 23_000_000_000,
+      tx: 75_000_000_000,
+      diskReadSectors: 22_000_000_000,
+      diskWriteSectors: 650_000_000,
+      diskReads: 1_000_000,
+      diskWrites: 3_000_000,
+      retrans: 12_000,
+      outSegs: 88_000_000,
+      activeOpens: 1_754_000,
+      passiveOpens: 343_000,
+      bootTime: Date.now() - rnd(3, 100) * 86400_000,
     });
     return id;
   }
 
   async exec(sessionId: string, command: string): Promise<ExecResult> {
-    await new Promise((r) => setTimeout(r, rnd(60, 220)));
+    await new Promise((r) => setTimeout(r, rnd(60, 200)));
     const st = this.sessions.get(sessionId);
     if (!st) return { stdout: '', stderr: 'session closed', code: 1 };
-
     const ok = (stdout: string): ExecResult => ({ stdout, stderr: '', code: 0 });
 
     if (command.includes('cat /proc/stat')) {
-      // 模拟 CPU 增量
-      const idleDelta = Math.floor(rnd(150, 260));
-      const totalDelta = 400; // 4 核 * 100 ticks/s
-      st.cpuIdle += idleDelta;
-      st.cpuTotal += totalDelta;
-      const busy = totalDelta - idleDelta;
-      const user = Math.floor(busy * 0.6);
-      const sys = Math.floor(busy * 0.3);
+      // 模拟每核增量
+      const cpuLines = st.cores
+        .map((core, i) => {
+          const busy = Math.floor(rnd(20, 300));
+          core.user += Math.floor(busy * 0.6);
+          core.sys += Math.floor(busy * 0.3);
+          core.idle += 100 - Math.floor(busy / 4);
+          core.iowait += Math.floor(rnd(0, 4));
+          return `cpu${i} ${core.user} 0 ${core.sys} ${core.idle} ${core.iowait} 0 0 0 0 0`;
+        })
+        .join('\n');
+      const tot = st.cores.reduce(
+        (a, x) => ({ user: a.user + x.user, sys: a.sys + x.sys, idle: a.idle + x.idle, iowait: a.iowait + x.iowait }),
+        { user: 0, sys: 0, idle: 0, iowait: 0 }
+      );
+
+      st.rx += rnd(200_000, 4_000_000);
+      st.tx += rnd(100_000, 1_500_000);
+      const readInc = Math.floor(rnd(0, 40_000));
+      const writeInc = Math.floor(rnd(0, 8_000));
+      st.diskReadSectors += readInc;
+      st.diskWriteSectors += writeInc;
+      st.diskReads += Math.floor(readInc / rnd(6, 10));
+      st.diskWrites += Math.floor(writeInc / rnd(6, 10));
+      st.retrans += Math.floor(rnd(0, 3));
+      st.outSegs += Math.floor(rnd(200, 2000));
+      st.activeOpens += Math.floor(rnd(0, 50));
+      st.passiveOpens += Math.floor(rnd(0, 20));
+
+      const up = (Date.now() - st.bootTime) / 1000;
       return ok(
-        `cpu  ${user} 0 ${sys} ${idleDelta} 30 0 5 0 0 0\n` +
-          `cpu0 ${user} 0 ${sys} ${idleDelta} 30 0 5 0 0 0\n` +
-          `intr 1\nctxt 1\nbtime ${Math.floor(st.bootTime / 1000)}\n` +
-          `==MEM==\n` +
-          `MemTotal:       16384000 kB\nMemFree:         2048000 kB\n` +
-          `MemAvailable:    8192000 kB\nBuffers:          512000 kB\nCached:          4096000 kB\n` +
-          `SwapTotal:       2097152 kB\nSwapFree:        1500000 kB\n` +
-          `==DISK==\n` +
-          `Filesystem     1024-blocks      Used Available Capacity Mounted on\n` +
-          `/dev/sda1        102400000  61440000  40960000      60% /\n` +
-          `==NET==\n` +
-          `Inter-|   Receive                                                |  Transmit\n` +
-          ` face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n` +
-          `    lo: 1000000    5000    0    0    0     0          0         0  1000000    5000    0    0    0     0       0          0\n` +
-          `  eth0: ${Math.floor((st.rx += rnd(100_000, 2_000_000)))}   80000    0    0    0     0          0         0 ${Math.floor((st.tx += rnd(50_000, 800_000)))}   60000    0    0    0     0       0          0\n` +
-          `==LOAD==\n` +
-          `${rnd(0.2, 2.5).toFixed(2)} ${rnd(0.2, 2).toFixed(2)} ${rnd(0.2, 1.5).toFixed(2)} 2/380 12345\n` +
-          `==UPTIME==\n` +
-          `${((Date.now() - st.bootTime) / 1000).toFixed(2)} 12345.00\n`
+        `==STAT==\ncpu  ${tot.user} 0 ${tot.sys} ${tot.idle} ${tot.iowait} 0 0 0 0 0\n${cpuLines}\nintr 1\nbtime ${Math.floor(st.bootTime / 1000)}\n` +
+          `==MEM==\nMemTotal:       16384000 kB\nMemFree:         2048000 kB\nMemAvailable:    8192000 kB\nBuffers:          512000 kB\nCached:          4096000 kB\nSReclaimable:     100000 kB\nSwapTotal:       2097152 kB\nSwapFree:        1500000 kB\n` +
+          `==DF==\nFilesystem     Type  1024-blocks      Used Available Capacity Mounted on\n/dev/vda3      ext4     39936000  18432000  21504000      47% /\n/dev/vda2      vfat       197000    191000      6000      97% /boot/efi\n` +
+          `==DISKSTATS==\n 259       0 vda ${st.diskReads} 0 ${st.diskReadSectors} ${Math.floor(st.diskReads * 1.2)} ${st.diskWrites} 0 ${st.diskWriteSectors} ${Math.floor(st.diskWrites * 1.1)} 0 1000 2000 0 0 0\n 259       2 vda2 100 0 26000 50 10 0 10000 20 0 60 70 0 0 0\n` +
+          `==NET==\nInter-|   Receive                                                |  Transmit\n face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n    lo: 4400000000 5000 0 0 0 0 0 0 4400000000 5000 0 0 0 0 0 0\n  eth0: ${Math.floor(st.rx)} 80000 0 0 0 0 0 0 ${Math.floor(st.tx)} 60000 0 0 0 0 0 0\ndocker0: 9999 100 0 0 0 0 0 0 8888 100 0 0 0 0 0 0\n` +
+          `==IP==\n1: lo    inet 127.0.0.1/8 scope host lo\n2: eth0    inet 172.25.82.97/20 brd 172.25.95.255 scope global eth0\n` +
+          `==SNMP==\nTcp: RtoAlgorithm RtoMin RtoMax MaxConn ActiveOpens PassiveOpens AttemptFails EstabResets CurrEstab InSegs OutSegs RetransSegs InErrs OutRsts InCsumErrors\nTcp: 1 200 120000 -1 ${st.activeOpens} ${st.passiveOpens} 100 50 ${Math.floor(rnd(200, 400))} 99999999 ${st.outSegs} ${st.retrans} 0 3000 0\n` +
+          `==LOAD==\n${rnd(0.2, 2.5).toFixed(2)} ${rnd(0.2, 2).toFixed(2)} ${rnd(0.2, 1.5).toFixed(2)} 2/380 12345\n` +
+          `==UPTIME==\n${up.toFixed(2)} ${(up * 4).toFixed(2)}\n`
       );
     }
 
@@ -112,8 +145,7 @@ export class MockSSHClient implements SSHClient {
       return ok(
         Array.from(
           { length: 20 },
-          (_, i) =>
-            `${new Date().toISOString()} [mock] log line ${i + 1} — ${Math.random().toString(36).slice(2)}`
+          (_, i) => `${new Date().toISOString()} [mock] log line ${i + 1} — ${Math.random().toString(36).slice(2)}`
         ).join('\n') + '\n'
       );
     }
@@ -121,16 +153,27 @@ export class MockSSHClient implements SSHClient {
     return ok('');
   }
 
+  async generateKeyPair(opts: KeyGenOptions): Promise<KeyPair> {
+    await new Promise((r) => setTimeout(r, 300));
+    const b64 = (n: number) => utf8ToBase64(String.fromCharCode(...Array.from({ length: n }, () => Math.floor(rnd(0, 256)))));
+    const algo = opts.type === 'rsa' ? 'ssh-rsa' : 'ssh-ed25519';
+    const keyType = opts.type === 'rsa' ? 'RSA' : 'OPENSSH';
+    return {
+      privateKey: `-----BEGIN ${keyType} PRIVATE KEY-----\nMOCK${b64(48).replace(/\n/g, '')}\nMOCK${b64(48).replace(/\n/g, '')}\n-----END ${keyType} PRIVATE KEY-----\n(演示模式生成的假密钥，仅供界面演示)`,
+      publicKey: `${algo} MOCK${b64(32).replace(/\n/g, '')} ${opts.comment ?? 'demo'}`,
+      fingerprint: `SHA256:MOCK${b64(16).replace(/\n|=/g, '').slice(0, 32)}`,
+    };
+  }
+
   async startShell(sessionId: string): Promise<void> {
     if (!this.sessions.has(sessionId)) throw new Error('session closed');
     const banner =
       'Welcome to Ubuntu 24.04.1 LTS (Mock)\r\n\r\n' +
-      ' * 这是 Mock 终端（Expo Go 开发模式）\r\n' +
+      ' * 这是演示终端（模拟数据）\r\n' +
       ' * 输入内容会被原样回显\r\n\r\n';
     this.emitShell(sessionId, banner);
     setTimeout(() => this.emitShell(sessionId, 'demo@demo-server:~$ '), 100);
 
-    // 简易回显：收集输入直到回车
     let buf = '';
     this.shellBuffers.set(sessionId, (chunk: string) => {
       for (const ch of chunk) {
@@ -152,11 +195,8 @@ export class MockSSHClient implements SSHClient {
     });
   }
 
-  private shellBuffers = new Map<string, (chunk: string) => void>();
-
   writeShell(sessionId: string, dataBase64: string): void {
-    const handler = this.shellBuffers.get(sessionId);
-    if (handler) handler(base64ToUtf8(dataBase64));
+    this.shellBuffers.get(sessionId)?.(base64ToUtf8(dataBase64));
   }
 
   resizeShell(): void {}

@@ -4,6 +4,8 @@ import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 
 import type {
   ExecResult,
+  KeyGenOptions,
+  KeyPair,
   ShellClosedEvent,
   ShellDataEvent,
   SSHClient,
@@ -25,6 +27,12 @@ interface RNSshNativeModule {
   writeShell(sessionId: string, dataBase64: string): void;
   resizeShell(sessionId: string, cols: number, rows: number): void;
   close(sessionId: string): void;
+  generateKeyPair(opts: {
+    type: string;
+    bits: number;
+    passphrase?: string;
+    comment?: string;
+  }): Promise<{ privateKey: string; publicKey: string; fingerprint: string }>;
 }
 
 const native: RNSshNativeModule | undefined = NativeModules.RNSsh;
@@ -68,6 +76,16 @@ export class NativeSSHClient implements SSHClient {
 
   close(sessionId: string): void {
     native?.close(sessionId);
+  }
+
+  generateKeyPair(opts: KeyGenOptions): Promise<KeyPair> {
+    if (!native) return Promise.reject(new Error('原生 SSH 模块不可用'));
+    return native.generateKeyPair({
+      type: opts.type,
+      bits: opts.bits ?? 2048,
+      passphrase: opts.passphrase,
+      comment: opts.comment,
+    });
   }
 
   onShellData(cb: (e: ShellDataEvent) => void): () => void {

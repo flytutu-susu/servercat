@@ -7,11 +7,15 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 
-import { Accent, Colors, Spacing } from '@/constants/theme';
+import { Dark, Spacing } from '@/constants/theme';
 import { openDedicatedSession } from '@/services/connection';
 import { getSSH } from '@/ssh';
 import { useServers } from '@/store/servers';
 import { utf8ToBase64 } from '@/utils/base64';
+
+// 终端固定深色（对齐 xterm 主题）
+const Colors = { dark: { ...Dark, backgroundElement: Dark.card } };
+const Accent = { blue: '#0A84FF', green: '#30D158', red: '#FF453A' };
 
 /** 读取打包后的 terminal.html 文本（只读一次） */
 let htmlPromise: Promise<string> | null = null;

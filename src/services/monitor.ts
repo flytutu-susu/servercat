@@ -1,34 +1,80 @@
-/** 监控数据采集与解析：通过一条组合命令读取 /proc，JS 侧解析 */
+/** 监控数据采集与解析 v2：一条组合命令读取 /proc 与系统信息，JS 侧解析 */
 
 import type { ExecResult, SSHClient } from '@/ssh';
 
-/** 一次轮询采集的指标快照 */
-export interface MetricsSnapshot {
-  timestamp: number;
-  /** 0-100，由两次采样的 /proc/stat 差值算出；首次为 null */
-  cpuPercent: number | null;
-  cpuCount: number;
-  memTotalKb: number;
-  memUsedKb: number;
-  memAvailableKb: number;
+/** CPU 细分（百分比；首次采样为 null） */
+export interface CpuBreakdown {
+  percent: number | null; // 总占用
+  user: number | null;
+  system: number | null;
+  iowait: number | null;
+  steal: number | null;
+  idle: number | null;
+  count: number;
+  /** 每核占用（0-100 或 null） */
+  cores: (number | null)[];
+}
+
+export interface MemStat {
+  totalKb: number;
+  usedKb: number;
+  availableKb: number;
+  /** 页面缓存 Cached + SReclaimable */
+  cacheKb: number;
   swapTotalKb: number;
   swapUsedKb: number;
-  diskTotalKb: number;
-  diskUsedKb: number;
-  diskPercent: number;
-  /** 字节累计值 */
-  netRxBytes: number;
-  netTxBytes: number;
-  /** 字节/秒，由两次采样差值算出；首次为 null */
-  netRxPerSec: number | null;
-  netTxPerSec: number | null;
+  percent: number;
+  swapPercent: number;
+}
+
+export interface DiskMountStat {
+  fs: string;
+  type: string;
+  mount: string;
+  totalKb: number;
+  usedKb: number;
+  percent: number;
+  totalReadBytes: number;
+  totalWriteBytes: number;
+  readBps: number | null;
+  writeBps: number | null;
+  readIops: number | null;
+  writeIops: number | null;
+  /** 平均延迟 ms（基于 time_in_queue 增量近似） */
+  readLatencyMs: number | null;
+  writeLatencyMs: number | null;
+}
+
+export interface NetIfStat {
+  name: string;
+  ip: string | null;
+  virtual: boolean;
+  rxBytes: number;
+  txBytes: number;
+  rxPerSec: number | null;
+  txPerSec: number | null;
+}
+
+export interface TcpStat {
+  retransPercent: number | null;
+  activeOpens: number;
+  passiveOpens: number;
+  curEstab: number;
+}
+
+export interface MetricsSnapshot {
+  timestamp: number;
+  cpu: CpuBreakdown;
+  mem: MemStat;
+  disks: DiskMountStat[];
+  nets: NetIfStat[];
+  tcp: TcpStat;
   load1: number;
   load5: number;
   load15: number;
   uptimeSec: number;
 }
 
-/** 服务器基本信息（连接后采集一次） */
 export interface ServerInfo {
   hostname: string;
   uname: string;
@@ -39,14 +85,19 @@ export interface ServerInfo {
 
 export const COLLECT_COMMAND = [
   "echo '==STAT=='",
-  'head -n 1 /proc/stat',
-  'nproc',
+  'cat /proc/stat',
   "echo '==MEM=='",
   'cat /proc/meminfo',
-  "echo '==DISK=='",
-  'df -kP /',
+  "echo '==DF=='",
+  "df -kPT -x tmpfs -x devtmpfs -x overlay -x squashfs -x efivarfs 2>/dev/null || df -kPT",
+  "echo '==DISKSTATS=='",
+  'cat /proc/diskstats',
   "echo '==NET=='",
   'cat /proc/net/dev',
+  "echo '==IP=='",
+  'ip -4 -o addr show 2>/dev/null',
+  "echo '==SNMP=='",
+  "grep '^Tcp:' /proc/net/snmp",
   "echo '==LOAD=='",
   'cat /proc/loadavg',
   "echo '==UPTIME=='",
@@ -59,7 +110,7 @@ export const INFO_COMMAND = [
   "echo '==OS=='",
   "grep -m1 PRETTY_NAME /etc/os-release 2>/dev/null || echo 'PRETTY_NAME=\"Linux\"'",
   "echo '==CPU=='",
-  "grep -m1 'model name' /proc/cpuinfo 2>/dev/null || echo 'model name : Unknown'",
+  "grep -m1 'model name' /proc/cpuinfo 2>/dev/null || grep -m1 'Hardware' /proc/cpuinfo 2>/dev/null || echo 'model name : Unknown'",
   "echo '==CORES=='",
   'nproc',
   "echo '==HOSTNAME=='",
@@ -82,146 +133,296 @@ export function parseServerInfo(stdout: string): ServerInfo {
   const cpuModel = cpuLine.split(':')[1]?.trim() ?? 'Unknown CPU';
   const cores = parseInt(section(stdout, 'CORES', 'HOSTNAME').trim(), 10) || 1;
   const hostname = section(stdout, 'HOSTNAME', null).split('\n')[0]?.trim() ?? '';
-  return {
-    hostname,
-    uname,
-    osName: osMatch?.[1] ?? 'Linux',
-    cpuModel,
-    cores,
-  };
+  return { hostname, uname, osName: osMatch?.[1] ?? 'Linux', cpuModel, cores };
 }
 
-interface RawCpu {
-  total: number;
-  idle: number;
+// ---------------------------------------------------------------------------
+// /proc/stat
+
+/** [user, nice, system, idle, iowait, irq, softirq, steal] */
+type CpuTicks = number[];
+
+function parseCpuTicks(line: string): CpuTicks {
+  const p = line.trim().split(/\s+/).slice(1).map(Number);
+  return [0, 1, 2, 3, 4, 5, 6, 7].map((i) => p[i] ?? 0);
 }
 
-function parseCpuLine(statSection: string): RawCpu {
-  const line = statSection.split('\n').find((l) => l.startsWith('cpu '));
-  if (!line) return { total: 0, idle: 0 };
-  const parts = line.trim().split(/\s+/).slice(1).map(Number);
-  // user nice system idle iowait irq softirq steal
-  const idle = (parts[3] ?? 0) + (parts[4] ?? 0);
-  const total = parts.reduce((a, b) => a + (b || 0), 0);
-  return { total, idle };
+function cpuTotal(t: CpuTicks): number {
+  return t.reduce((a, b) => a + b, 0);
 }
 
-function parseMemKb(memSection: string, key: string): number {
-  const m = memSection.match(new RegExp(`^${key}:\\s+(\\d+)`, 'm'));
-  return m ? parseInt(m[1], 10) : 0;
+function cpuPct(cur: CpuTicks, prev: CpuTicks | null, idx: number | readonly number[]): number | null {
+  if (!prev) return null;
+  const dt = cpuTotal(cur) - cpuTotal(prev);
+  if (dt <= 0) return null;
+  const idxs = typeof idx === 'number' ? [idx] : idx;
+  const d = idxs.reduce((a, i) => a + (cur[i] - prev[i]), 0);
+  return Math.max(0, Math.min(100, (d / dt) * 100));
 }
 
-function parseNet(netSection: string): { rx: number; tx: number } {
-  let rx = 0;
-  let tx = 0;
-  for (const line of netSection.split('\n')) {
-    const m = line.match(/^\s*([a-zA-Z0-9_.-]+):\s*(.+)$/);
-    if (!m) continue;
-    const iface = m[1];
-    if (iface === 'lo' || iface.startsWith('docker') || iface.startsWith('veth') || iface.startsWith('br-')) {
-      continue;
-    }
-    const cols = m[2].trim().split(/\s+/).map(Number);
-    rx += cols[0] ?? 0;
-    tx += cols[8] ?? 0;
+// ---------------------------------------------------------------------------
+// /proc/diskstats
+// 字段: major minor name reads reads_merged sectors_read ms_reading
+//       writes writes_merged sectors_written ms_writing ios_in_progress ms_doing_io ms_weighted
+
+interface DiskRaw {
+  sectorsRead: number;
+  sectorsWritten: number;
+  reads: number;
+  writes: number;
+  msRead: number;
+  msWrite: number;
+}
+
+function parseDiskstats(sec: string): Map<string, DiskRaw> {
+  const map = new Map<string, DiskRaw>();
+  for (const line of sec.split('\n')) {
+    const p = line.trim().split(/\s+/);
+    if (p.length < 14) continue;
+    map.set(p[2], {
+      reads: Number(p[3]) || 0,
+      sectorsRead: Number(p[5]) || 0,
+      msRead: Number(p[6]) || 0,
+      writes: Number(p[7]) || 0,
+      sectorsWritten: Number(p[9]) || 0,
+      msWrite: Number(p[10]) || 0,
+    });
   }
-  return { rx, tx };
+  return map;
 }
 
-/** 前一次采样的原始值，用于计算 CPU% 与网络速率 */
+/** 从 df 的设备名找 diskstats 键：/dev/vda3 → vda3，否则找父盘 vda */
+function diskKeyFor(fs: string, diskstats: Map<string, DiskRaw>): string | null {
+  const dev = fs.replace(/^\/dev\//, '');
+  if (diskstats.has(dev)) return dev;
+  const parent = dev.replace(/p?\d+$/, '');
+  if (diskstats.has(parent)) return parent;
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// /proc/net/dev + ip addr
+
+function isVirtualIf(name: string): boolean {
+  return (
+    name === 'lo' ||
+    /^(docker|veth|br-|virbr|tun|tap|wg|tailscale|zt|cni|flannel|cali|kube)/.test(name)
+  );
+}
+
+/** 前一次采样的原始值 */
 export interface PrevSample {
-  cpu: RawCpu;
-  rx: number;
-  tx: number;
+  cpuTotal: CpuTicks;
+  cores: CpuTicks[];
+  disks: Map<string, DiskRaw>;
+  nets: Map<string, { rx: number; tx: number }>;
+  tcp: { retrans: number; outSegs: number };
   timestamp: number;
 }
 
-export function parseMetrics(stdout: string, prev: PrevSample | null): { snap: MetricsSnapshot; sample: PrevSample } {
+export function parseMetrics(
+  stdout: string,
+  prev: PrevSample | null
+): { snap: MetricsSnapshot; sample: PrevSample } {
+  const now = Date.now();
   const statSec = section(stdout, 'STAT', 'MEM');
-  const memSec = section(stdout, 'MEM', 'DISK');
-  const diskSec = section(stdout, 'DISK', 'NET');
-  const netSec = section(stdout, 'NET', 'LOAD');
+  const memSec = section(stdout, 'MEM', 'DF');
+  const dfSec = section(stdout, 'DF', 'DISKSTATS');
+  const diskSec = section(stdout, 'DISKSTATS', 'NET');
+  const netSec = section(stdout, 'NET', 'IP');
+  const ipSec = section(stdout, 'IP', 'SNMP');
+  const snmpSec = section(stdout, 'SNMP', 'LOAD');
   const loadSec = section(stdout, 'LOAD', 'UPTIME');
   const uptimeSec = parseFloat(section(stdout, 'UPTIME', null).split(/\s+/)[0] ?? '0') || 0;
 
-  // CPU
-  const statLines = statSec.split('\n');
-  const cpu = parseCpuLine(statLines[0] ?? '');
-  const cpuCount = parseInt(statLines[1]?.trim() ?? '', 10) || 1;
-  let cpuPercent: number | null = null;
-  if (prev && cpu.total > prev.cpu.total) {
-    const totalDelta = cpu.total - prev.cpu.total;
-    const idleDelta = cpu.idle - prev.cpu.idle;
-    cpuPercent = Math.max(0, Math.min(100, (1 - idleDelta / totalDelta) * 100));
+  // ---- CPU ----
+  const cpuLines = statSec.split('\n').filter((l) => /^cpu/.test(l));
+  const totalTicks = cpuLines.length ? parseCpuTicks(cpuLines[0]) : null;
+  const coreTicks = cpuLines.slice(1).filter((l) => /^cpu\d/.test(l)).map(parseCpuTicks);
+  const prevCores = prev?.cores ?? [];
+  const cores = coreTicks.map((t, i) => {
+    if (!prev || !prevCores[i]) return null;
+    const dt = cpuTotal(t) - cpuTotal(prevCores[i]);
+    if (dt <= 0) return null;
+    const idleDelta = t[3] + t[4] - (prevCores[i][3] + prevCores[i][4]);
+    return Math.max(0, Math.min(100, (1 - idleDelta / dt) * 100));
+  });
+
+  const cpu: CpuBreakdown = {
+    percent: null,
+    user: null,
+    system: null,
+    iowait: null,
+    steal: null,
+    idle: null,
+    count: coreTicks.length || 1,
+    cores,
+  };
+  if (totalTicks) {
+    const prevTotal = prev?.cpuTotal ?? null;
+    cpu.user = cpuPct(totalTicks, prevTotal, [0, 1]);
+    cpu.system = cpuPct(totalTicks, prevTotal, [2, 5, 6]);
+    cpu.iowait = cpuPct(totalTicks, prevTotal, 4);
+    cpu.steal = cpuPct(totalTicks, prevTotal, 7);
+    cpu.idle = cpuPct(totalTicks, prevTotal, [3, 4]);
+    cpu.percent = cpu.idle != null ? Math.max(0, 100 - cpu.idle) : null;
   }
 
-  // 内存
-  const memTotalKb = parseMemKb(memSec, 'MemTotal');
-  const memAvailableKb = parseMemKb(memSec, 'MemAvailable') || parseMemKb(memSec, 'MemFree');
-  const memUsedKb = Math.max(0, memTotalKb - memAvailableKb);
-  const swapTotalKb = parseMemKb(memSec, 'SwapTotal');
-  const swapUsedKb = Math.max(0, swapTotalKb - parseMemKb(memSec, 'SwapFree'));
+  // ---- 内存 ----
+  const mem = (key: string): number => {
+    const m = memSec.match(new RegExp(`^${key}:\\s+(\\d+)`, 'm'));
+    return m ? parseInt(m[1], 10) : 0;
+  };
+  const totalKb = mem('MemTotal');
+  const availableKb = mem('MemAvailable') || mem('MemFree');
+  const cacheKb = mem('Cached') + mem('SReclaimable');
+  const swapTotalKb = mem('SwapTotal');
+  const swapFreeKb = mem('SwapFree');
+  const memStat: MemStat = {
+    totalKb,
+    usedKb: Math.max(0, totalKb - availableKb),
+    availableKb,
+    cacheKb,
+    swapTotalKb,
+    swapUsedKb: Math.max(0, swapTotalKb - swapFreeKb),
+    percent: totalKb > 0 ? ((totalKb - availableKb) / totalKb) * 100 : 0,
+    swapPercent: swapTotalKb > 0 ? ((swapTotalKb - swapFreeKb) / swapTotalKb) * 100 : 0,
+  };
 
-  // 磁盘（df -kP /）
-  let diskTotalKb = 0;
-  let diskUsedKb = 0;
-  let diskPercent = 0;
-  const diskLines = diskSec.split('\n').filter((l) => l.trim() && !l.startsWith('Filesystem'));
-  if (diskLines.length > 0) {
-    const cols = diskLines[0].trim().split(/\s+/);
-    diskTotalKb = parseInt(cols[1] ?? '0', 10) || 0;
-    diskUsedKb = parseInt(cols[2] ?? '0', 10) || 0;
-    diskPercent = parseInt((cols[4] ?? '0').replace('%', ''), 10) || 0;
+  // ---- 磁盘 ----
+  const diskstats = parseDiskstats(diskSec);
+  const prevDisks = prev?.disks ?? new Map<string, DiskRaw>();
+  const dtSec = prev ? (now - prev.timestamp) / 1000 : 0;
+  const disks: DiskMountStat[] = [];
+  for (const line of dfSec.split('\n')) {
+    const t = line.trim();
+    if (!t || t.startsWith('Filesystem')) continue;
+    const p = t.split(/\s+/);
+    if (p.length < 7) continue;
+    const [fs, type, blocks, used, , cap, ...mountParts] = p;
+    const mount = mountParts.join(' ');
+    const dk = diskKeyFor(fs, diskstats);
+    const raw = dk ? diskstats.get(dk)! : null;
+    const prevRaw = dk ? prevDisks.get(dk) : undefined;
+    const SECTOR = 512;
+    const stat: DiskMountStat = {
+      fs,
+      type,
+      mount,
+      totalKb: parseInt(blocks, 10) || 0,
+      usedKb: parseInt(used, 10) || 0,
+      percent: parseInt((cap ?? '0').replace('%', ''), 10) || 0,
+      totalReadBytes: (raw?.sectorsRead ?? 0) * SECTOR,
+      totalWriteBytes: (raw?.sectorsWritten ?? 0) * SECTOR,
+      readBps: null,
+      writeBps: null,
+      readIops: null,
+      writeIops: null,
+      readLatencyMs: null,
+      writeLatencyMs: null,
+    };
+    if (raw && prevRaw && dtSec > 0) {
+      const dReads = raw.reads - prevRaw.reads;
+      const dWrites = raw.writes - prevRaw.writes;
+      stat.readBps = Math.max(0, ((raw.sectorsRead - prevRaw.sectorsRead) * SECTOR) / dtSec);
+      stat.writeBps = Math.max(0, ((raw.sectorsWritten - prevRaw.sectorsWritten) * SECTOR) / dtSec);
+      stat.readIops = Math.max(0, dReads / dtSec);
+      stat.writeIops = Math.max(0, dWrites / dtSec);
+      stat.readLatencyMs = dReads > 0 ? Math.max(0, (raw.msRead - prevRaw.msRead) / dReads) : 0;
+      stat.writeLatencyMs = dWrites > 0 ? Math.max(0, (raw.msWrite - prevRaw.msWrite) / dWrites) : 0;
+    }
+    disks.push(stat);
   }
 
-  // 网络
-  const { rx, tx } = parseNet(netSec);
-  const now = Date.now();
-  let netRxPerSec: number | null = null;
-  let netTxPerSec: number | null = null;
-  if (prev && now > prev.timestamp) {
-    const dt = (now - prev.timestamp) / 1000;
-    netRxPerSec = Math.max(0, (rx - prev.rx) / dt);
-    netTxPerSec = Math.max(0, (tx - prev.tx) / dt);
+  // ---- 网络 ----
+  const ipByIf = new Map<string, string>();
+  for (const line of ipSec.split('\n')) {
+    const m = line.match(/^\d+:\s+(\S+)\s+inet\s+(\d+\.\d+\.\d+\.\d+)\//);
+    if (m && !ipByIf.has(m[1])) ipByIf.set(m[1], m[2]);
+  }
+  const prevNets = prev?.nets ?? new Map();
+  const nets: NetIfStat[] = [];
+  const netsRaw = new Map<string, { rx: number; tx: number }>();
+  for (const line of netSec.split('\n')) {
+    const m = line.match(/^\s*([a-zA-Z0-9_.:-]+):\s*(.+)$/);
+    if (!m) continue;
+    const name = m[1];
+    const cols = m[2].trim().split(/\s+/).map(Number);
+    const rx = cols[0] ?? 0;
+    const tx = cols[8] ?? 0;
+    netsRaw.set(name, { rx, tx });
+    const prevNet = prevNets.get(name);
+    nets.push({
+      name,
+      ip: ipByIf.get(name) ?? null,
+      virtual: isVirtualIf(name),
+      rxBytes: rx,
+      txBytes: tx,
+      rxPerSec: prevNet && dtSec > 0 ? Math.max(0, (rx - prevNet.rx) / dtSec) : null,
+      txPerSec: prevNet && dtSec > 0 ? Math.max(0, (tx - prevNet.tx) / dtSec) : null,
+    });
+  }
+  nets.sort((a, b) => Number(a.virtual) - Number(b.virtual));
+
+  // ---- TCP ----
+  let tcp: TcpStat = { retransPercent: null, activeOpens: 0, passiveOpens: 0, curEstab: 0 };
+  let tcpRaw = { retrans: 0, outSegs: 0 };
+  const snmpLines = snmpSec.split('\n').filter((l) => l.startsWith('Tcp:'));
+  if (snmpLines.length >= 2) {
+    const keys = snmpLines[0].split(/\s+/).slice(1);
+    const vals = snmpLines[1].split(/\s+/).slice(1).map(Number);
+    const get = (k: string): number => vals[keys.indexOf(k)] ?? 0;
+    const retrans = get('RetransSegs');
+    const outSegs = get('OutSegs');
+    let retransPercent: number | null = null;
+    if (prev) {
+      const dRetrans = retrans - prev.tcp.retrans;
+      const dOut = outSegs - prev.tcp.outSegs;
+      retransPercent = dOut > 0 ? Math.max(0, Math.min(100, (dRetrans / dOut) * 100)) : 0;
+    }
+    tcp = {
+      retransPercent,
+      activeOpens: get('ActiveOpens'),
+      passiveOpens: get('PassiveOpens'),
+      curEstab: get('CurrEstab'),
+    };
+    tcpRaw = { retrans, outSegs };
   }
 
-  // 负载
+  // ---- 负载 ----
   const loadParts = loadSec.split(/\s+/);
-  const load1 = parseFloat(loadParts[0] ?? '0') || 0;
-  const load5 = parseFloat(loadParts[1] ?? '0') || 0;
-  const load15 = parseFloat(loadParts[2] ?? '0') || 0;
 
   const snap: MetricsSnapshot = {
     timestamp: now,
-    cpuPercent,
-    cpuCount,
-    memTotalKb,
-    memUsedKb,
-    memAvailableKb,
-    swapTotalKb,
-    swapUsedKb,
-    diskTotalKb,
-    diskUsedKb,
-    diskPercent,
-    netRxBytes: rx,
-    netTxBytes: tx,
-    netRxPerSec,
-    netTxPerSec,
-    load1,
-    load5,
-    load15,
+    cpu,
+    mem: memStat,
+    disks,
+    nets,
+    tcp,
+    load1: parseFloat(loadParts[0] ?? '0') || 0,
+    load5: parseFloat(loadParts[1] ?? '0') || 0,
+    load15: parseFloat(loadParts[2] ?? '0') || 0,
     uptimeSec,
   };
-  return { snap, sample: { cpu, rx, tx, timestamp: now } };
+  return {
+    snap,
+    sample: {
+      cpuTotal: totalTicks ?? [0, 0, 0, 0, 0, 0, 0, 0],
+      cores: coreTicks,
+      disks: diskstats,
+      nets: netsRaw,
+      tcp: tcpRaw,
+      timestamp: now,
+    },
+  };
 }
 
-/** 对某台已连接的会话执行一次采集 */
 export async function pollOnce(
   ssh: SSHClient,
   sessionId: string,
   prev: PrevSample | null
 ): Promise<{ snap: MetricsSnapshot; sample: PrevSample }> {
-  const result: ExecResult = await ssh.exec(sessionId, COLLECT_COMMAND, 15);
+  const result: ExecResult = await ssh.exec(sessionId, COLLECT_COMMAND, 20);
   if (result.code !== 0 && !result.stdout.includes('==STAT==')) {
     throw new Error(result.stderr || `采集命令失败 (code=${result.code})`);
   }

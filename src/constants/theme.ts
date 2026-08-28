@@ -1,30 +1,54 @@
 /**
- * ServerCat 风格暗色主题
+ * 主题：跟随系统（ServerCat 风格浅色 + 深色）
  */
 
 import '@/global.css';
 
-export const Colors = {
-  light: {
-    text: '#111114',
-    background: '#F2F2F6',
-    backgroundElement: '#FFFFFF',
-    backgroundSelected: '#E4E4EA',
-    textSecondary: '#6B6F76',
-    border: '#D8D8DE',
-  },
-  dark: {
-    text: '#F5F5F7',
-    background: '#0B0B0E',
-    backgroundElement: '#17181D',
-    backgroundSelected: '#23242B',
-    textSecondary: '#8E9199',
-    border: '#26272E',
-  },
-} as const;
+import { useColorScheme } from 'react-native';
 
-/** 语义色（与亮暗模式无关，图表/状态统一使用） */
-export const Accent = {
+export interface Palette {
+  text: string;
+  background: string;
+  /** 卡片/分组背景 */
+  card: string;
+  backgroundSelected: string;
+  textSecondary: string;
+  border: string;
+  /** 图表与状态色 */
+  green: string;
+  red: string;
+  orange: string;
+  yellow: string;
+  blue: string;
+  purple: string;
+  teal: string;
+  pink: string;
+}
+
+export const Light: Palette = {
+  text: '#1C1C1E',
+  background: '#F2F2F6',
+  card: '#FFFFFF',
+  backgroundSelected: '#E8E8ED',
+  textSecondary: '#8A8A8E',
+  border: '#E6E6EB',
+  green: '#34C759',
+  red: '#FF3B30',
+  orange: '#FF9500',
+  yellow: '#FFCC00',
+  blue: '#007AFF',
+  purple: '#AF52DE',
+  teal: '#5AC8FA',
+  pink: '#FF2D55',
+};
+
+export const Dark: Palette = {
+  text: '#F5F5F7',
+  background: '#0B0B0E',
+  card: '#17181D',
+  backgroundSelected: '#23242B',
+  textSecondary: '#8E9199',
+  border: '#26272E',
   green: '#30D158',
   red: '#FF453A',
   orange: '#FF9F0A',
@@ -33,14 +57,10 @@ export const Accent = {
   purple: '#BF5AF2',
   teal: '#64D2FF',
   pink: '#FF375F',
-} as const;
+};
 
-export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
-export type ColorScheme = keyof typeof Colors;
-
-export function useThemeColors(): (typeof Colors)['dark'] {
-  // 应用固定暗色主题（类 ServerCat 风格）
-  return Colors.dark;
+export function useColors(): Palette {
+  return useColorScheme() === 'dark' ? Dark : Light;
 }
 
 export const Spacing = {
@@ -54,7 +74,7 @@ export const Spacing = {
 } as const;
 
 export const Radius = {
-  card: 14,
-  small: 8,
+  card: 16,
+  small: 10,
   pill: 999,
 } as const;

@@ -25,6 +25,9 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Sync version from tag/run
+        run: node scripts/bump-version.mjs
+
       - name: Install JS dependencies
         run: npm ci --no-audit --no-fund
 

@@ -1,9 +1,9 @@
-/** 通用卡片容器 */
+/** 通用卡片容器（主题化） */
 
 import React from 'react';
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
-import { Colors, Radius, Spacing } from '@/constants/theme';
+import { Radius, Spacing, useColors } from '@/constants/theme';
 
 interface Props {
   title?: string;
@@ -13,11 +13,21 @@ interface Props {
 }
 
 export function Card({ title, right, children, style }: Props) {
+  const c = useColors();
   return (
-    <View style={[styles.card, style]}>
+    <View
+      style={[
+        styles.card,
+        { backgroundColor: c.card, borderColor: c.border },
+        style,
+      ]}>
       {(title || right) && (
         <View style={styles.header}>
-          {title ? <Text style={styles.title}>{title}</Text> : <View />}
+          {title ? (
+            <Text style={[styles.title, { color: c.textSecondary }]}>{title}</Text>
+          ) : (
+            <View />
+          )}
           {right}
         </View>
       )}
@@ -26,15 +36,19 @@ export function Card({ title, right, children, style }: Props) {
   );
 }
 
+/** 卡片内分隔线 */
+export function CardDivider() {
+  const c = useColors();
+  return <View style={[styles.divider, { backgroundColor: c.border }]} />;
+}
+
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: Colors.dark.backgroundElement,
     borderRadius: Radius.card,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.dark.border,
     padding: Spacing.three,
     marginHorizontal: Spacing.three,
-    marginBottom: Spacing.three,
+    marginBottom: Spacing.two + 4,
   },
   header: {
     flexDirection: 'row',
@@ -43,10 +57,13 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.two,
   },
   title: {
-    color: Colors.dark.textSecondary,
     fontSize: 13,
     fontWeight: '600',
     letterSpacing: 0.5,
     textTransform: 'uppercase',
+  },
+  divider: {
+    height: StyleSheet.hairlineWidth,
+    marginVertical: Spacing.three,
   },
 });

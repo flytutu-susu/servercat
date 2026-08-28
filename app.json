@@ -6,7 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "servercat",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "automatic",
     "ios": {
       "bundleIdentifier": "com.servercat.ios",
       "buildNumber": "1",
@@ -33,9 +33,12 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#0B0B0E",
+          "backgroundColor": "#F2F2F6",
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "imageWidth": 76,
+          "dark": {
+            "backgroundColor": "#0B0B0E"
+          }
         }
       ],
       "expo-asset"

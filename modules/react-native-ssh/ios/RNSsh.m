@@ -12,7 +12,12 @@
 // NMSSH 源码已 vendor 到 ios/Vendor/NMSSH（底层库升级为 libssh2 1.11.1 + OpenSSL 3.5.1）
 #import "NMSSH.h"
 
-// OpenSSL 3.x 内建线程安全，无需 1.0.x 时代的加锁回调。
+// OpenSSL 3.5（设备端密钥生成用）；3.x 内建线程安全
+#import <openssl/evp.h>
+#import <openssl/pem.h>
+#import <openssl/bn.h>
+#import <openssl/bio.h>
+#import <openssl/core_names.h>
 
 // ---------------------------------------------------------------------------
 
@@ -266,8 +271,138 @@ RCT_EXPORT_METHOD(close:(NSString *)sessionId) {
 }
 
 // ---------------------------------------------------------------------------
-#pragma mark - NMSSHChannelDelegate
+#pragma mark - 密钥生成（OpenSSL EVP）
 
+// 向缓冲区追加 SSH wire-format 字符串（4 字节大端长度 + 内容）
+static void rnssh_wire_put_string(NSMutableData *buf, const void *bytes, NSUInteger len) {
+  uint32_t n = CFSwapInt32HostToBig((uint32_t)len);
+  [buf appendBytes:&n length:4];
+  [buf appendBytes:bytes length:len];
+}
+
+static void rnssh_wire_put_bignum(NSMutableData *buf, BIGNUM *bn) {
+  int bytes = (BN_num_bits(bn) + 7) / 8;
+  NSMutableData *raw = [NSMutableData dataWithLength:bytes];
+  BN_bn2bin(bn, (unsigned char *)raw.mutableBytes);
+  const uint8_t *p = (const uint8_t *)raw.bytes;
+  // 最高位置 1 时需要补 0x00（SSH mpint 为正数补码）
+  if (bytes > 0 && (p[0] & 0x80)) {
+    NSMutableData *padded = [NSMutableData dataWithLength:bytes + 1];
+    ((uint8_t *)padded.mutableBytes)[0] = 0;
+    memcpy((uint8_t *)padded.mutableBytes + 1, p, bytes);
+    rnssh_wire_put_string(buf, padded.bytes, padded.length);
+  } else {
+    rnssh_wire_put_string(buf, p, bytes);
+  }
+}
+
+RCT_EXPORT_METHOD(generateKeyPair:(NSDictionary *)opts
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+  NSString *type = opts[@"type"] ?: @"ed25519";
+  NSInteger bits = [opts[@"bits"] integerValue] ?: 2048;
+  NSString *passphrase = opts[@"passphrase"];
+  NSString *comment = opts[@"comment"] ?: @"servercat@iphone";
+
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    EVP_PKEY_CTX *ctx = NULL;
+    EVP_PKEY *pkey = NULL;
+    NSMutableData *pubBlob = nil;
+    NSString *algoName = nil;
+
+    @try {
+      // ---- 生成 ----
+      if ([type isEqualToString:@"rsa"]) {
+        ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, NULL);
+        if (!ctx || EVP_PKEY_keygen_init(ctx) <= 0 ||
+            EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, (int)bits) <= 0 ||
+            EVP_PKEY_keygen(ctx, &pkey) <= 0) {
+          reject(@"keygen_failed", @"RSA 密钥生成失败", nil);
+          return;
+        }
+        algoName = @"ssh-rsa";
+
+        BIGNUM *n = NULL, *e = NULL;
+        if (EVP_PKEY_get_bn_param(pkey, OSSL_PKEY_PARAM_RSA_N, &n) != 1 ||
+            EVP_PKEY_get_bn_param(pkey, OSSL_PKEY_PARAM_RSA_E, &e) != 1) {
+          reject(@"keygen_failed", @"读取 RSA 公钥参数失败", nil);
+          return;
+        }
+        pubBlob = [NSMutableData new];
+        rnssh_wire_put_string(pubBlob, algoName.UTF8String, algoName.length);
+        rnssh_wire_put_bignum(pubBlob, e);
+        rnssh_wire_put_bignum(pubBlob, n);
+        BN_free(n);
+        BN_free(e);
+      } else {
+        ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, NULL);
+        if (!ctx || EVP_PKEY_keygen_init(ctx) <= 0 || EVP_PKEY_keygen(ctx, &pkey) <= 0) {
+          reject(@"keygen_failed", @"ED25519 密钥生成失败", nil);
+          return;
+        }
+        algoName = @"ssh-ed25519";
+
+        size_t rawLen = 0;
+        if (EVP_PKEY_get_raw_public_key(pkey, NULL, &rawLen) != 1 || rawLen == 0) {
+          reject(@"keygen_failed", @"读取 ED25519 公钥失败", nil);
+          return;
+        }
+        NSMutableData *raw = [NSMutableData dataWithLength:rawLen];
+        if (EVP_PKEY_get_raw_public_key(pkey, (unsigned char *)raw.mutableBytes, &rawLen) != 1) {
+          reject(@"keygen_failed", @"读取 ED25519 公钥失败", nil);
+          return;
+        }
+        pubBlob = [NSMutableData new];
+        rnssh_wire_put_string(pubBlob, algoName.UTF8String, algoName.length);
+        rnssh_wire_put_string(pubBlob, raw.bytes, raw.length);
+      }
+
+      // ---- 私钥导出（PKCS#8 PEM，可带口令加密） ----
+      BIO *bio = BIO_new(BIO_s_mem());
+      int ok;
+      if (passphrase.length > 0) {
+        ok = PEM_write_bio_PKCS8PrivateKey(bio, pkey, EVP_aes_256_cbc(),
+                                           NULL, 0, NULL, (void *)passphrase.UTF8String);
+      } else {
+        ok = PEM_write_bio_PKCS8PrivateKey(bio, pkey, NULL, NULL, 0, NULL, NULL);
+      }
+      if (ok != 1) {
+        BIO_free(bio);
+        reject(@"keygen_failed", @"私钥导出失败", nil);
+        return;
+      }
+      char *pemData = NULL;
+      long pemLen = BIO_get_mem_data(bio, &pemData);
+      NSString *privatePem = [[NSString alloc] initWithBytes:pemData length:pemLen encoding:NSUTF8StringEncoding];
+      BIO_free(bio);
+
+      // ---- 公钥行 + 指纹 ----
+      NSString *pubB64 = [pubBlob base64EncodedStringWithOptions:0];
+      NSString *publicLine = [NSString stringWithFormat:@"%@ %@ %@", algoName, pubB64, comment];
+
+      NSMutableData *digest = [NSMutableData dataWithLength:EVP_MAX_MD_SIZE];
+      unsigned int digestLen = 0;
+      if (EVP_Digest(pubBlob.bytes, pubBlob.length, (unsigned char *)digest.mutableBytes, &digestLen, EVP_sha256(), NULL) != 1) {
+        reject(@"keygen_failed", @"指纹计算失败", nil);
+        return;
+      }
+      NSString *fp = [[NSData dataWithBytes:digest.bytes length:digestLen] base64EncodedStringWithOptions:0];
+      while ([fp hasSuffix:@"="]) fp = [fp substringToIndex:fp.length - 1];
+
+      resolve(@{
+        @"privateKey": privatePem,
+        @"publicKey": publicLine,
+        @"fingerprint": [NSString stringWithFormat:@"SHA256:%@", fp],
+      });
+    } @finally {
+      if (pkey) EVP_PKEY_free(pkey);
+      if (ctx) EVP_PKEY_CTX_free(ctx);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+#pragma mark - NMSSHChannelDelegate
 - (void)channel:(NMSSHChannel *)channel didReadRawData:(NSData *)data {
   [self emitShellData:data channel:channel];
 }

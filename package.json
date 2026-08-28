@@ -8,6 +8,7 @@
     "@react-native-async-storage/async-storage": "2.2.0",
     "expo": "~57.0.17",
     "expo-asset": "~57.0.15",
+    "expo-clipboard": "~57.0.1",
     "expo-constants": "~57.0.15",
     "expo-device": "~57.0.1",
     "expo-file-system": "~57.0.6",

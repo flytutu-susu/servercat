@@ -30,6 +30,27 @@ export interface ShellClosedEvent {
 }
 
 /** 统一 SSH 客户端接口，原生实现与 Mock 实现都遵循它 */
+/** 密钥生成参数 */
+export interface KeyGenOptions {
+  type: 'ed25519' | 'rsa';
+  /** RSA 位数（默认 2048），ed25519 忽略 */
+  bits?: number;
+  /** 私钥口令（可选） */
+  passphrase?: string;
+  /** 公钥注释（默认 servercat@iphone） */
+  comment?: string;
+}
+
+/** 生成的密钥对 */
+export interface KeyPair {
+  /** PEM/PKCS#8 私钥文本 */
+  privateKey: string;
+  /** OpenSSH authorized_keys 格式公钥行，如 "ssh-ed25519 AAAA... comment" */
+  publicKey: string;
+  /** SHA256 指纹，如 "SHA256:abc..." */
+  fingerprint: string;
+}
+
 export interface SSHClient {
   /** 建立连接并完成认证，返回 sessionId */
   connect(opts: SSHConnectOptions): Promise<string>;
@@ -41,6 +62,8 @@ export interface SSHClient {
   writeShell(sessionId: string, dataBase64: string): void;
   /** 调整 PTY 尺寸 */
   resizeShell(sessionId: string, cols: number, rows: number): void;
+  /** 生成密钥对（设备端 OpenSSL） */
+  generateKeyPair(opts: KeyGenOptions): Promise<KeyPair>;
   /** 关闭 shell 或整个会话 */
   close(sessionId: string): void;
   /** 订阅 shell 输出 */
