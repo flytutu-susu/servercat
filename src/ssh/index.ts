@@ -1,24 +1,26 @@
-/** SSH 客户端工厂：优先原生模块，Expo Go 下自动退回 Mock */
+/** SSH 客户端工厂：优先原生模块；Expo Go 或「演示模式」下用 Mock */
 
 import { MockSSHClient } from './mock';
 import { hasNativeSSH, NativeSSHClient } from './native';
 import type { SSHClient } from './types';
 
-let instance: SSHClient | null = null;
-let usingMock = false;
+import { useSettings } from '@/store/settings';
 
-export function getSSH(): SSHClient {
-  if (!instance) {
-    usingMock = !hasNativeSSH();
-    instance = usingMock ? new MockSSHClient() : new NativeSSHClient();
-  }
-  return instance;
+let nativeInstance: SSHClient | null = null;
+let mockInstance: SSHClient | null = null;
+
+export function isMockMode(): boolean {
+  return useSettings.getState().demoMode || !hasNativeSSH();
 }
 
-/** 当前是否运行在 Mock 模式（无原生 SSH 模块，如 Expo Go） */
-export function isMockMode(): boolean {
-  getSSH();
-  return usingMock;
+/** 获取当前应使用的 SSH 客户端（每次按 demoMode 动态选择） */
+export function getSSH(): SSHClient {
+  if (isMockMode()) {
+    if (!mockInstance) mockInstance = new MockSSHClient();
+    return mockInstance;
+  }
+  if (!nativeInstance) nativeInstance = new NativeSSHClient();
+  return nativeInstance;
 }
 
 export type { SSHClient } from './types';

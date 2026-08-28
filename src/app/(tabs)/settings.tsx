@@ -1,12 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import React from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { Accent, Colors, Radius, Spacing } from '@/constants/theme';
 import { useConnections } from '@/services/connection';
 import { isMockMode } from '@/ssh';
 import { useServers } from '@/store/servers';
+import { useSettings } from '@/store/settings';
 
 function Row({
   icon,
@@ -38,6 +39,8 @@ function Row({
 
 export default function SettingsScreen() {
   const servers = useServers((s) => s.servers);
+  const demoMode = useSettings((s) => s.demoMode);
+  const setDemoMode = useSettings((s) => s.setDemoMode);
 
   const disconnectAll = () => {
     useConnections.getState().disconnectAll();
@@ -60,6 +63,25 @@ export default function SettingsScreen() {
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: Colors.dark.background }} contentContainerStyle={{ padding: Spacing.three }}>
+      <Text style={styles.sectionTitle}>通用</Text>
+      <View style={styles.group}>
+        <View style={styles.row}>
+          <Ionicons name="flask-outline" size={20} color={Colors.dark.textSecondary} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.rowTitle}>演示模式</Text>
+            <Text style={styles.rowSubtitle}>使用内置模拟数据体验界面（无需真实服务器）</Text>
+          </View>
+          <Switch
+            value={demoMode}
+            onValueChange={(v) => {
+              useConnections.getState().disconnectAll();
+              setDemoMode(v);
+            }}
+            trackColor={{ false: Colors.dark.backgroundSelected, true: Accent.green }}
+          />
+        </View>
+      </View>
+
       <Text style={styles.sectionTitle}>连接</Text>
       <View style={styles.group}>
         <Row icon="flash-outline" title="断开所有连接" subtitle={`当前管理 ${servers.length} 台服务器`} onPress={disconnectAll} />

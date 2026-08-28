@@ -18,6 +18,7 @@ import { useConnections, type ConnStatus } from '@/services/connection';
 import { pollOnce, type PrevSample } from '@/services/monitor';
 import { getSSH, isMockMode } from '@/ssh';
 import { useServers, type ServerRecord } from '@/store/servers';
+import { useSettings } from '@/store/settings';
 
 interface ServerSummary {
   cpuPercent: number | null;
@@ -111,6 +112,7 @@ export default function ServersScreen() {
   const router = useRouter();
   const servers = useServers((s) => s.servers);
   const hydrated = useServers((s) => s.hydrated);
+  const demoMode = useSettings((s) => s.demoMode); // 订阅以便横幅即时刷新
   const [summaries, setSummaries] = useState<Record<string, ServerSummary>>({});
   const [refreshing, setRefreshing] = useState(false);
   const prevRef = useRef<Map<string, PrevSample>>(new Map());
@@ -169,7 +171,7 @@ export default function ServersScreen() {
       {isMockMode() && (
         <View style={styles.mockBanner}>
           <Ionicons name="flask-outline" size={14} color={Accent.orange} />
-          <Text style={styles.mockText}>演示模式：正在使用模拟数据（Expo Go 无原生 SSH）</Text>
+          <Text style={styles.mockText}>演示模式：正在使用模拟数据（非真实服务器）</Text>
         </View>
       )}
       <FlatList
@@ -186,6 +188,7 @@ export default function ServersScreen() {
               <Ionicons name="server-outline" size={56} color={Colors.dark.textSecondary} />
               <Text style={styles.emptyTitle}>还没有服务器</Text>
               <Text style={styles.emptyHint}>点击右下角 + 添加你的第一台服务器</Text>
+              <Text style={styles.emptyHint2}>（也可在 设置 → 演示模式 中先用模拟数据体验）</Text>
             </View>
           ) : (
             <ActivityIndicator style={{ marginTop: 80 }} color={Colors.dark.textSecondary} />
@@ -241,6 +244,7 @@ const styles = StyleSheet.create({
   empty: { alignItems: 'center', gap: Spacing.two },
   emptyTitle: { color: Colors.dark.text, fontSize: 20, fontWeight: '600', marginTop: Spacing.two },
   emptyHint: { color: Colors.dark.textSecondary, fontSize: 14 },
+  emptyHint2: { color: Colors.dark.textSecondary, fontSize: 12, opacity: 0.7 },
   mockBanner: {
     flexDirection: 'row',
     alignItems: 'center',
