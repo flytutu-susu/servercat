@@ -36,6 +36,10 @@ export CROSS_SDK="iPhoneOS.sdk"
 make -j"$(sysctl -n hw.ncpu)" build_libs
 make install_sw
 ls -lh "$DEPS_PREFIX/lib/"
+# OpenSSL 头文件也打包（原生模块需要用 EVP 接口在设备端生成密钥对）
+mkdir -p "$OUT/include"
+rm -rf "$OUT/include/openssl"
+cp -R "$DEPS_PREFIX/include/openssl" "$OUT/include/openssl"
 
 echo "== 编译 libssh2 ${LIBSSH2_VER} (CMake, iOS arm64) =="
 cd "$WORK/libssh2-${LIBSSH2_VER}"
