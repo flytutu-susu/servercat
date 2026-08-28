@@ -13,7 +13,11 @@ interface ConnEntry {
   status: ConnStatus;
   error?: string;
   connecting?: Promise<string> | null;
+  /** 最近一次连接尝试时间（用于失败退避） */
+  lastAttempt?: number;
 }
+
+const RETRY_BACKOFF_MS = 15000;
 
 interface ConnectionsState {
   entries: Record<string, ConnEntry>;
@@ -33,12 +37,23 @@ export const useConnections = create<ConnectionsState>()((set, get) => ({
     const existing = get().entries[serverId];
     if (existing?.status === 'online' && existing.sessionId) return existing.sessionId;
     if (existing?.connecting) return existing.connecting;
+    // 失败退避：刚失败过的服务器，短时间内直接报错，避免重连风暴
+    if (
+      existing?.status === 'error' &&
+      existing.lastAttempt &&
+      Date.now() - existing.lastAttempt < RETRY_BACKOFF_MS
+    ) {
+      throw new Error(existing.error ?? '连接失败（稍后自动重试）');
+    }
 
     const server = useServers.getState().servers.find((s) => s.id === serverId);
     if (!server) throw new Error('服务器不存在');
 
     set((s) => ({
-      entries: { ...s.entries, [serverId]: { sessionId: null, status: 'connecting', connecting: undefined } },
+      entries: {
+        ...s.entries,
+        [serverId]: { sessionId: null, status: 'connecting', connecting: undefined, lastAttempt: Date.now() },
+      },
     }));
 
     const promise = (async () => {
@@ -60,7 +75,15 @@ export const useConnections = create<ConnectionsState>()((set, get) => ({
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         set((s) => ({
-          entries: { ...s.entries, [serverId]: { sessionId: null, status: 'error', error: message } },
+          entries: {
+            ...s.entries,
+            [serverId]: {
+              sessionId: null,
+              status: 'error',
+              error: message,
+              lastAttempt: s.entries[serverId]?.lastAttempt,
+            },
+          },
         }));
         throw e;
       }
