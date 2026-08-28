@@ -12,36 +12,7 @@
 // NMSSH 源码已 vendor 到 ios/Vendor/NMSSH（底层库升级为 libssh2 1.11.1 + OpenSSL 3.5.1）
 #import "NMSSH.h"
 
-// ---------------------------------------------------------------------------
-// OpenSSL < 1.1 需要应用层提供线程锁回调；NMSSH 未提供头文件，手工弱引用声明。
-// OpenSSL >= 1.1 内建线程安全，符号不存在时（weak import => NULL）直接跳过。
-// ---------------------------------------------------------------------------
-typedef void (*rnssh_crypto_lock_cb)(int mode, int type, const char *file, int line);
-typedef unsigned long (*rnssh_crypto_id_cb)(void);
-extern int CRYPTO_num_locks(void) __attribute__((weak_import));
-extern void CRYPTO_set_locking_callback(rnssh_crypto_lock_cb cb) __attribute__((weak_import));
-extern void CRYPTO_set_id_callback(rnssh_crypto_id_cb cb) __attribute__((weak_import));
-
-#define RNSSH_CRYPTO_LOCK 1
-#define RNSSH_CRYPTO_UNLOCK 2
-#define RNSSH_CRYPTO_READ 4
-#define RNSSH_CRYPTO_WRITE 8
-
-static NSMutableArray<NSLock *> *gCryptoLocks = nil;
-
-static void rnssh_locking_callback(int mode, int type, const char *file, int line) {
-  if (type < 0 || type >= (int)gCryptoLocks.count) return;
-  NSLock *lock = gCryptoLocks[type];
-  if ((mode & RNSSH_CRYPTO_LOCK) || (mode & RNSSH_CRYPTO_READ) || (mode & RNSSH_CRYPTO_WRITE)) {
-    [lock lock];
-  } else if (mode & RNSSH_CRYPTO_UNLOCK) {
-    [lock unlock];
-  }
-}
-
-static unsigned long rnssh_id_callback(void) {
-  return (unsigned long)[NSThread currentThread].hash;
-}
+// OpenSSL 3.x 内建线程安全，无需 1.0.x 时代的加锁回调。
 
 // ---------------------------------------------------------------------------
 
@@ -68,20 +39,6 @@ RCT_EXPORT_MODULE(RNSsh)
 
 + (BOOL)requiresMainQueueSetup {
   return NO;
-}
-
-+ (void)initialize {
-  if (self != [RNSsh class]) return;
-  // 为多会话并发设置 OpenSSL 线程锁（仅 OpenSSL < 1.1 需要）
-  if (CRYPTO_num_locks && CRYPTO_set_locking_callback && CRYPTO_set_id_callback) {
-    int n = CRYPTO_num_locks();
-    gCryptoLocks = [NSMutableArray arrayWithCapacity:n];
-    for (int i = 0; i < n; i++) {
-      [gCryptoLocks addObject:[[NSLock alloc] init]];
-    }
-    CRYPTO_set_locking_callback(rnssh_locking_callback);
-    CRYPTO_set_id_callback(rnssh_id_callback);
-  }
 }
 
 - (instancetype)init {
