@@ -44,3 +44,5 @@ example
 
 # terminal bundle 临时目录
 /.terminal-build
+
+build-log.txt
