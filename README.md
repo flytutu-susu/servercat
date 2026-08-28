@@ -53,6 +53,6 @@ modules/
 
 ## 已知限制
 
-- NMSSH 内置 libssh2 1.8：不支持 ed25519 密钥；对 OpenSSH ≥ 8.8 的服务器使用
-  RSA 密钥登录可能失败（服务器默认拒绝 ssh-rsa 签名）。建议用密码或 ECDSA 密钥。
+- SSH 底层为 **libssh2 1.11.1 + OpenSSL 3.5.1**（vendored NMSSH 封装，CI 编译 arm64 静态库），
+  支持 ed25519 / RSA（rsa-sha2）/ ECDSA 密钥与现代 OpenSSH 服务器。
 - 免费 Apple ID 签名 7 天过期，SideStore 会在后台自动续签（需保持其 VPN 开启）。

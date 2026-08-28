@@ -54,8 +54,7 @@ iTunes 用 Microsoft Store 版也可以，并且能自动导入配对文件。
 - **打不开应用 / 提示不受信任的开发者**：设置 → 通用 → VPN与设备管理 → 信任你的 Apple ID。
 - **AltServer 提示找不到 iPhone**：确认 iTunes/iCloud 都是官网版且已登录；数据线直连；
   手机上点了「信任此电脑」。不行就换方式 A（iloader）。
-- **RSA 私钥登录失败**：NMSSH 的 libssh2 1.8 不支持服务器要求的 rsa-sha2 签名
-  （OpenSSH 8.8+ 默认）。换用密码登录，或在服务器上生成 ECDSA 密钥：
-  `ssh-keygen -t ecdsa`，并把私钥粘贴到 App 中。
+- **私钥登录**：v1.1.0 起支持 ed25519 / RSA（含新版服务器的 rsa-sha2）/ ECDSA 私钥，
+  粘贴完整 PEM/OpenSSH 格式私钥即可。
 - **连接提示认证失败但密码正确**：部分服务器只开 keyboard-interactive，App 已自动回退尝试。
 - 更多连接问题见 [TROUBLESHOOTING.md](TROUBLESHOOTING.md)。

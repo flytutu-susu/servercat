@@ -10,16 +10,15 @@ App 内任何连接问题都会显示具体错误信息。按下表对照处理�
 | `认证失败：Authentication failed` | 用户名/密码错误；或服务器禁止密码登录（见下） |
 | 密码正确但认证失败 | 服务器可能只允许 keyboard-interactive（App 已自动回退尝试）或仅允许密钥登录 |
 
-## 私钥登录问题（重要）
+## 私钥登录
 
-App 内置的 libssh2 为 1.8 版（与 App Store 版 ServerCat 同源的 NMSSH 库），有两个限制：
+自 v1.1.0 起，SSH 底层升级为 **libssh2 1.11.1 + OpenSSL 3.5.1**，支持：
 
-1. **RSA 密钥 vs OpenSSH 8.8+ 服务器**：新版 sshd 默认拒绝 `ssh-rsa`（SHA-1）签名，
-   RSA 私钥登录会失败。两种解法：
-   - 在服务器上换 ECDSA 密钥：`ssh-keygen -t ecdsa -f ~/.ssh/id_ecdsa`，
-     `cat ~/.ssh/id_ecdsa.pub >> ~/.ssh/authorized_keys`，App 里粘贴 `id_ecdsa` 私钥全文
-   - 或在服务器 `/etc/ssh/sshd_config` 加 `PubkeyAcceptedAlgorithms +ssh-rsa` 后 `systemctl reload ssh`
-2. **不支持 ed25519 密钥**：请改用 ECDSA（`ssh-keygen -t ecdsa`）
+- ✅ ed25519 密钥（OpenSSH 格式，含口令保护）
+- ✅ RSA 密钥登录 OpenSSH 8.8+ 服务器（rsa-sha2-256/512 签名）
+- ✅ ECDSA 密钥
+
+粘贴私钥时请包含完整的 `-----BEGIN ... PRIVATE KEY-----` 到 `-----END ... PRIVATE KEY-----`。
 
 ## 监控数据显示问题
 
