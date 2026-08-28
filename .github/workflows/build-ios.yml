@@ -13,6 +13,8 @@ jobs:
   build:
     runs-on: macos-26
     timeout-minutes: 60
+    permissions:
+      contents: write # 用于 tag 构建时创建 Release
     steps:
       - name: Checkout
         uses: actions/checkout@v4
