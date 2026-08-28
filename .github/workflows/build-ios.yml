@@ -31,6 +31,15 @@ jobs:
       - name: Build terminal.html (xterm bundle)
         run: npm run build:terminal
 
+      - name: Download prebuilt SSH static libs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TMP=$(mktemp -d)
+          gh release download deps --pattern 'ios-ssh-libs.tar.gz' --dir "$TMP"
+          tar xzf "$TMP/ios-ssh-libs.tar.gz" -C modules/react-native-ssh/vendor
+          ls -lh modules/react-native-ssh/vendor/lib
+
       - name: Prebuild iOS project (+ pod install)
         run: npx expo prebuild --platform ios --clean
         env:

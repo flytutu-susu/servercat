@@ -45,4 +45,8 @@ example
 # terminal bundle 临时目录
 /.terminal-build
 
+# SSH 静态库（由 CI 从 Release「deps」下载）
+/modules/react-native-ssh/vendor/lib/
+/.deps-build/
+
 build-log.txt

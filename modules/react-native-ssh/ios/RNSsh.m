@@ -9,7 +9,8 @@
 
 #import "RNSsh.h"
 
-#import <NMSSH/NMSSH.h>
+// NMSSH 源码已 vendor 到 ios/Vendor/NMSSH（底层库升级为 libssh2 1.11.1 + OpenSSL 3.5.1）
+#import "NMSSH.h"
 
 // ---------------------------------------------------------------------------
 // OpenSSL < 1.1 需要应用层提供线程锁回调；NMSSH 未提供头文件，手工弱引用声明。

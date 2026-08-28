@@ -1,0 +1,33 @@
+name: Build SSH static libs (one-time)
+
+# 手动触发：编译 libssh2 1.11.1 + OpenSSL 3.5.1 (iOS arm64) 静态库，
+# 打包上传到固定 Release「deps」，供主构建工作流下载（约 10-15 分钟，只需偶尔重跑）。
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-libs:
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build OpenSSL + libssh2 (iOS arm64)
+        run: bash scripts/build-ssh-libs.sh
+
+      - name: Package libs
+        run: |
+          cd modules/react-native-ssh/vendor
+          tar czf "$GITHUB_WORKSPACE/ios-ssh-libs.tar.gz" lib include
+          ls -lh "$GITHUB_WORKSPACE/ios-ssh-libs.tar.gz"
+
+      - name: Upload to Release 'deps'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create deps --title "Prebuilt dependencies" --notes "iOS arm64 静态库：libssh2 1.11.1 + OpenSSL 3.5.1" || true
+          gh release upload deps "$GITHUB_WORKSPACE/ios-ssh-libs.tar.gz" --clobber
