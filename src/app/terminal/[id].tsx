@@ -121,6 +121,7 @@ export default function TerminalScreen() {
     const offClose = getSSH().onShellClosed((e) => {
       if (e.sessionId === sessionRef.current) {
         sessionRef.current = null;
+        shellStartedRef.current = false; // 允许「刷新」按钮重连
         setPhase('closed');
       }
     });

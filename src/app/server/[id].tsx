@@ -206,6 +206,7 @@ export default function ServerDetailScreen() {
             refreshing={refreshing}
             onRefresh={async () => {
               setRefreshing(true);
+              useConnections.getState().invalidate(id!); // 手动刷新跳过失败退避，立即重连
               await doPoll();
               await doDocker();
               setRefreshing(false);
