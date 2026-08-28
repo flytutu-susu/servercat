@@ -6,7 +6,7 @@
 
 1. **下载工具**（都在 Windows 上操作）：
    - 安装 [iTunes](https://www.apple.com/itunes/download/win64)（不要装 Microsoft Store 版）
-     和 [iCloud](https://updates.cdn-apple.com/2020/windows/001-39935-20200911-1A70AA56-A448-11EA-8CC0-99D41950005E/iCloudSetup.exe)
+     和 [iCloud](https://updates.cdn-apple.com/2020/windows/001-39935-20200911-1A70AA56-F448-11EA-8CC0-99D41950005E/iCloudSetup.exe)
      （Apple 官网直链版），装好后各打开一次并登录 Apple ID。
    - 下载 AltServer（Windows 版）：https://cdn.altstore.io/file/altstore/altinstaller.zip
    - 下载 SideStore IPA：https://github.com/sidestore/sidestore/releases/latest（`SideStore.ipa`）
